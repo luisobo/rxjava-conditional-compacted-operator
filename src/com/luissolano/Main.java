@@ -1,30 +1,36 @@
 package com.luissolano;
 
-import java.util.*;
-import java.util.concurrent.*;
+import io.reactivex.BackpressureStrategy;
+import io.reactivex.FlowableOperator;
+import io.reactivex.Observable;
+import io.reactivex.Scheduler;
+import io.reactivex.disposables.Disposable;
+import io.reactivex.disposables.SerialDisposable;
+import io.reactivex.internal.disposables.EmptyDisposable;
+import io.reactivex.schedulers.Schedulers;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import rx.*;
-import rx.Observable;
-import rx.Observable.Operator;
-import rx.Scheduler.Worker;
-import rx.schedulers.Schedulers;
-import rx.subscriptions.*;
-
-/* Imported from https://gist.github.com/akarnokd/56f7f5ba99a0baae598f67d2ad4672ea
- * All credit to David Karnok https://github.com/akarnokd
- */
 public class Main {
 
     public static void main(String[] args) {
         Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
 
-        source.lift(new ConditionalCompactor(500, TimeUnit.SECONDS, Schedulers.computation()))
+
+
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new ConditionalCompactor(500, TimeUnit.SECONDS, Schedulers.computation()))
                 .subscribe(System.out::println, Throwable::printStackTrace);
 
     }
 
-    static final class ConditionalCompactor implements Operator<String, String> {
+    static final class ConditionalCompactor implements FlowableOperator<String, String> {
         final Scheduler scheduler;
 
         final long timeout;
@@ -38,20 +44,22 @@ public class Main {
         }
 
         @Override
-        public Subscriber<? super String> call(Subscriber<? super String> t) {
+        public Subscriber<? super String> apply(Subscriber<? super String> t) {
             ConditionalCompactorSubscriber parent = new ConditionalCompactorSubscriber(t, timeout, unit, scheduler.createWorker());
 
-            t.add(parent);
-            t.add(parent.worker);
+//            t.add(parent);
+//            t.add(parent.worker);
             // t.setProducer(parent.requested);
 
             return parent;
         }
 
-        static final class ConditionalCompactorSubscriber extends Subscriber<String> {
+        static final class ConditionalCompactorSubscriber implements Subscription, Subscriber<String> {
             final Subscriber<? super String> actual;
 
-            final Worker worker;
+            Subscription s;
+
+            final Scheduler.Worker worker;
 
             final long timeout;
 
@@ -59,16 +67,15 @@ public class Main {
 
             final AtomicInteger wip;
 
-            final SerialSubscription mas;
+            final SerialDisposable mas;
 
             final Queue<String> queue;
 
             final List<String> batch;
 
-            static final Subscription NO_TIMER;
+            static final Disposable NO_TIMER;
             static {
-                NO_TIMER = Subscriptions.empty();
-                NO_TIMER.unsubscribe();
+                NO_TIMER = EmptyDisposable.INSTANCE;
             }
 
             volatile boolean done;
@@ -78,16 +85,22 @@ public class Main {
 
             int lastLength;
 
-            ConditionalCompactorSubscriber(Subscriber<? super String> actual, long timeout, TimeUnit unit, Worker worker) {
+            ConditionalCompactorSubscriber(Subscriber<? super String> actual, long timeout, TimeUnit unit, Scheduler.Worker worker) {
                 this.actual = actual;
                 this.worker = worker;
                 this.timeout = timeout;
                 this.unit = unit;
                 this.batch = new ArrayList<>();
                 this.wip = new AtomicInteger();
-                this.mas = new SerialSubscription();
+                this.mas = new SerialDisposable();
                 this.mas.set(NO_TIMER);
                 this.queue = new ConcurrentLinkedQueue<>();
+            }
+
+            @Override
+            public void onSubscribe(Subscription subscription) {
+                this.s = subscription;
+                actual.onSubscribe(this);
             }
 
             @Override
@@ -104,7 +117,7 @@ public class Main {
             }
 
             @Override
-            public void onCompleted() {
+            public void onComplete() {
                 done = true;
                 drain();
             }
@@ -121,14 +134,14 @@ public class Main {
                         if (d && error != null) {
                             queue.clear();
                             actual.onError(error);
-                            worker.unsubscribe();
+                            worker.dispose();
                             return;
                         }
                         String s = queue.peek();
                         if (s == null) {
                             if (d) {
-                                actual.onCompleted();
-                                worker.unsubscribe();
+                                actual.onComplete();
+                                worker.dispose();
                                 return;
                             }
                             break;
@@ -202,6 +215,16 @@ public class Main {
                         break;
                     }
                 }
+            }
+
+            @Override
+            public void request(long l) {
+                s.request(l);
+            }
+
+            @Override
+            public void cancel() {
+                s.cancel();
             }
         }
     }
