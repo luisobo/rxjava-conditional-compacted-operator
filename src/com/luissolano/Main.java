@@ -4,51 +4,50 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import rx.*;
-import rx.Observable;
-import rx.Observable.Operator;
-import rx.Scheduler.Worker;
-import rx.schedulers.Schedulers;
-import rx.subscriptions.*;
+import org.reactivestreams.*;
 
-/* Imported from https://gist.github.com/akarnokd/56f7f5ba99a0baae598f67d2ad4672ea
- * All credit to David Karnok https://github.com/akarnokd
+import io.reactivex.*;
+import io.reactivex.Scheduler.Worker;
+import io.reactivex.disposables.*;
+import io.reactivex.schedulers.Schedulers;
+
+/* Imported from http://stackoverflow.com/questions/42114546/rxjava-substitute-a-subsequence-of-elements-with-a-single-element/42117531#42117531
+    author David Karnok (https://github.com/akarnokd)
  */
 public class Main {
 
     public static void main(String[] args) {
-        Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
+        Flowable<String> source = Flowable.just(
+                "A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
 
-        source.lift(new ConditionalCompactor(500, TimeUnit.SECONDS, Schedulers.computation()))
+        source.lift(new ConditionalCompactor(
+                500, TimeUnit.SECONDS, Schedulers.computation()))
                 .subscribe(System.out::println, Throwable::printStackTrace);
 
     }
 
-    static final class ConditionalCompactor implements Operator<String, String> {
+    static final class ConditionalCompactor implements FlowableOperator<String, String> {
         final Scheduler scheduler;
 
         final long timeout;
 
         final TimeUnit unit;
 
-        ConditionalCompactor(long timeout, TimeUnit unit, Scheduler scheduler) {
+        ConditionalCompactor(long timeout, TimeUnit unit,
+                             Scheduler scheduler) {
             this.scheduler = scheduler;
             this.timeout = timeout;
             this.unit = unit;
         }
 
         @Override
-        public Subscriber<? super String> call(Subscriber<? super String> t) {
-            ConditionalCompactorSubscriber parent = new ConditionalCompactorSubscriber(t, timeout, unit, scheduler.createWorker());
-
-            t.add(parent);
-            t.add(parent.worker);
-            // t.setProducer(parent.requested);
-
-            return parent;
+        public Subscriber<? super String> apply(Subscriber<? super String> t) {
+            return new ConditionalCompactorSubscriber(
+                    t, timeout, unit, scheduler.createWorker());
         }
 
-        static final class ConditionalCompactorSubscriber extends Subscriber<String> {
+        static final class ConditionalCompactorSubscriber
+                implements Subscriber<String>, Subscription {
             final Subscriber<? super String> actual;
 
             final Worker worker;
@@ -59,16 +58,18 @@ public class Main {
 
             final AtomicInteger wip;
 
-            final SerialSubscription mas;
+            final SerialDisposable mas;
 
             final Queue<String> queue;
 
             final List<String> batch;
 
-            static final Subscription NO_TIMER;
+            Subscription s;
+
+            static final Disposable NO_TIMER;
             static {
-                NO_TIMER = Subscriptions.empty();
-                NO_TIMER.unsubscribe();
+                NO_TIMER = Disposables.empty();
+                NO_TIMER.dispose();
             }
 
             volatile boolean done;
@@ -78,16 +79,23 @@ public class Main {
 
             int lastLength;
 
-            ConditionalCompactorSubscriber(Subscriber<? super String> actual, long timeout, TimeUnit unit, Worker worker) {
+            ConditionalCompactorSubscriber(Subscriber<? super String> actual,
+                                           long timeout, TimeUnit unit, Worker worker) {
                 this.actual = actual;
                 this.worker = worker;
                 this.timeout = timeout;
                 this.unit = unit;
                 this.batch = new ArrayList<>();
                 this.wip = new AtomicInteger();
-                this.mas = new SerialSubscription();
+                this.mas = new SerialDisposable();
                 this.mas.set(NO_TIMER);
                 this.queue = new ConcurrentLinkedQueue<>();
+            }
+
+            @Override
+            public void onSubscribe(Subscription s) {
+                this.s = s;
+                actual.onSubscribe(this);
             }
 
             @Override
@@ -104,9 +112,20 @@ public class Main {
             }
 
             @Override
-            public void onCompleted() {
+            public void onComplete() {
                 done = true;
                 drain();
+            }
+
+            @Override
+            public void cancel() {
+                s.cancel();
+                worker.dispose();
+            }
+
+            @Override
+            public void request(long n) {
+                s.request(n);
             }
 
             void drain() {
@@ -121,14 +140,14 @@ public class Main {
                         if (d && error != null) {
                             queue.clear();
                             actual.onError(error);
-                            worker.unsubscribe();
+                            worker.dispose();
                             return;
                         }
                         String s = queue.peek();
                         if (s == null) {
                             if (d) {
-                                actual.onCompleted();
-                                worker.unsubscribe();
+                                actual.onComplete();
+                                worker.dispose();
                                 return;
                             }
                             break;
@@ -150,6 +169,7 @@ public class Main {
                                         queue.offer("T");
                                         drain();
                                     }, timeout, unit));
+                                    this.s.request(1);
                                 }
                                 break;
                             } else
@@ -179,6 +199,7 @@ public class Main {
                                         queue.offer("T");
                                         drain();
                                     }, timeout, unit));
+                                    this.s.request(1);
                                 }
                                 break;
                             }
@@ -189,7 +210,8 @@ public class Main {
                                 continue;
                             } else
                             if ("T".equals(s)) {
-                                queue.poll(); // ignore timeout markers outside the compacting mode
+                                // ignore timeout markers outside the compacting mode
+                                queue.poll();
                             } else {
                                 compacting = true;
                                 continue;
