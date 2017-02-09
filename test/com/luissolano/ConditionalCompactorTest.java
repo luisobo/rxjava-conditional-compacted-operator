@@ -2,6 +2,7 @@ package com.luissolano;
 
 
 import io.reactivex.BackpressureStrategy;
+import io.reactivex.Flowable;
 import io.reactivex.Observable;
 import io.reactivex.schedulers.Schedulers;
 import io.reactivex.subscribers.TestSubscriber;
@@ -165,9 +166,13 @@ public class ConditionalCompactorTest  {
 
         TestSubscriber<String> subscriber = new TestSubscriber<>(0);
 
-        Observable<String> source = Observable.concat(Observable.just("A", "A", "R", "S", "A"), Observable.just("R", "F", "R").delay(1, TimeUnit.SECONDS));
+        Flowable<String> source = Flowable.concat(
+                Flowable.just("A", "A", "R", "S", "A"),
+                Flowable.just("R").delay(1, TimeUnit.SECONDS),
+                Flowable.just("F", "R")
+        );
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
+        source.lift(new Main.ConditionalCompactor(100, TimeUnit.MILLISECONDS, Schedulers.computation()))
                 .subscribe(subscriber);
 
         subscriber.request(1);
@@ -183,6 +188,10 @@ public class ConditionalCompactorTest  {
         subscriber.assertValues("A", "A", "R");
 
         subscriber.request(1);
+
+        Thread.sleep(600);
+
+        subscriber.assertValues("A", "A", "R", "S");
 
         Thread.sleep(600);
 
