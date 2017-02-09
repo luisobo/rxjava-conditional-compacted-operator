@@ -20,7 +20,7 @@ public class ConditionalCompactorTest  {
 
         Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
                 .subscribe(subscriber);
 
         subscriber.assertValues("A", "A", "R", "M", "R", "A", "A");
@@ -34,7 +34,7 @@ public class ConditionalCompactorTest  {
 
         Observable<String> source = Observable.just("A", "R", "S", "A", "R", "S", "R", "A", "F", "A");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
                 .subscribe(subscriber);
 
         subscriber.assertValues("A", "R", "S", "A", "R", "M", "A");
@@ -48,7 +48,7 @@ public class ConditionalCompactorTest  {
 
         Observable<String> source = Observable.concat(Observable.just("A", "A", "R", "S", "A"), Observable.just("R", "F", "R", "A", "A").delay(1, TimeUnit.SECONDS));
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
                 .subscribe(subscriber);
 
 
@@ -65,7 +65,7 @@ public class ConditionalCompactorTest  {
 
         Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
                 .subscribe(subscriber);
 
         subscriber.request(4);
@@ -80,7 +80,7 @@ public class ConditionalCompactorTest  {
 
         Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
                 .subscribe(subscriber);
 
         subscriber.request(5);
@@ -95,7 +95,7 @@ public class ConditionalCompactorTest  {
 
         Observable<String> source = Observable.just("A", "S", "A", "F", "A", "S", "A", "R", "F", "R");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
                 .subscribe(subscriber);
 
         subscriber.request(1);
@@ -132,7 +132,7 @@ public class ConditionalCompactorTest  {
 
         Observable<String> source = Observable.just("A", "S", "A", "A", "S", "A", "R", "F", "R");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
                 .subscribe(subscriber);
 
         subscriber.request(1);
@@ -172,7 +172,7 @@ public class ConditionalCompactorTest  {
                 Flowable.just("F", "R")
         );
 
-        source.lift(new Main.ConditionalCompactor(100, TimeUnit.MILLISECONDS, Schedulers.computation()))
+        source.lift(new ConditionalCompactor(100, TimeUnit.MILLISECONDS, Schedulers.computation()))
                 .subscribe(subscriber);
 
         subscriber.request(1);
