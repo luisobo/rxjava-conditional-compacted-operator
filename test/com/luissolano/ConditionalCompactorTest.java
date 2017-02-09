@@ -1,16 +1,23 @@
 package com.luissolano;
 
 
-import io.reactivex.BackpressureStrategy;
 import io.reactivex.Flowable;
-import io.reactivex.Observable;
 import io.reactivex.schedulers.Schedulers;
 import io.reactivex.subscribers.TestSubscriber;
 import org.junit.Test;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public class ConditionalCompactorTest  {
+    private final NonThrowingPredicate<String> opensWindow = "S"::equals;
+    private final NonThrowingPredicate<String> closesWindow = "F"::equals;
+    private final NonThrowingFunction<List<String>, String> compact = s -> String.join("", s);
+
+    private Flowable<String> applyOperator(Flowable<String> source) {
+
+        return source.lift(new ConditionalCompactor<>(opensWindow, closesWindow, compact, 500, TimeUnit.MILLISECONDS, Schedulers.computation()));
+    }
 
 
     @Test
@@ -18,12 +25,11 @@ public class ConditionalCompactorTest  {
 
         TestSubscriber<String> subscriber = new TestSubscriber<>();
 
-        Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
+        Flowable<String> source = Flowable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
-                .subscribe(subscriber);
+        applyOperator(source).subscribe(subscriber);
 
-        subscriber.assertValues("A", "A", "R", "M", "R", "A", "A");
+        subscriber.assertValues("A", "A", "R", "SARF", "R", "A", "A");
 
     }
 
@@ -32,12 +38,11 @@ public class ConditionalCompactorTest  {
 
         TestSubscriber<String> subscriber = new TestSubscriber<>();
 
-        Observable<String> source = Observable.just("A", "R", "S", "A", "R", "S", "R", "A", "F", "A");
+        Flowable<String> source = Flowable.just("A", "R", "S", "A", "R", "S", "R", "A", "F", "A");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
-                .subscribe(subscriber);
+        applyOperator(source).subscribe(subscriber);
 
-        subscriber.assertValues("A", "R", "S", "A", "R", "M", "A");
+        subscriber.assertValues("A", "R", "S", "A", "R", "SRAF", "A");
     }
 
 
@@ -46,12 +51,9 @@ public class ConditionalCompactorTest  {
 
         TestSubscriber<String> subscriber = new TestSubscriber<>();
 
-        Observable<String> source = Observable.concat(Observable.just("A", "A", "R", "S", "A"), Observable.just("R", "F", "R", "A", "A").delay(1, TimeUnit.SECONDS));
+        Flowable<String> source = Flowable.concat(Flowable.just("A", "A", "R", "S", "A"), Flowable.just("R", "F", "R", "A", "A").delay(1, TimeUnit.SECONDS));
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
-                .subscribe(subscriber);
-
-
+        applyOperator(source).subscribe(subscriber);
 
         subscriber.await(2, TimeUnit.SECONDS);
 
@@ -63,14 +65,13 @@ public class ConditionalCompactorTest  {
 
         TestSubscriber<String> subscriber = new TestSubscriber<>(0);
 
-        Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
+        Flowable<String> source = Flowable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
-                .subscribe(subscriber);
+        applyOperator(source).subscribe(subscriber);
 
         subscriber.request(4);
 
-        subscriber.assertValues("A", "A", "R", "M");
+        subscriber.assertValues("A", "A", "R", "SARF");
     }
 
     @Test
@@ -78,14 +79,13 @@ public class ConditionalCompactorTest  {
 
         TestSubscriber<String> subscriber = new TestSubscriber<>(0);
 
-        Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
+        Flowable<String> source = Flowable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
-                .subscribe(subscriber);
+        applyOperator(source).subscribe(subscriber);
 
         subscriber.request(5);
 
-        subscriber.assertValues("A", "A", "R", "M", "R");
+        subscriber.assertValues("A", "A", "R", "SARF", "R");
     }
 
     @Test
@@ -93,10 +93,9 @@ public class ConditionalCompactorTest  {
 
         TestSubscriber<String> subscriber = new TestSubscriber<>(0);
 
-        Observable<String> source = Observable.just("A", "S", "A", "F", "A", "S", "A", "R", "F", "R");
+        Flowable<String> source = Flowable.just("A", "S", "A", "F", "A", "S", "A", "R", "F", "R");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
-                .subscribe(subscriber);
+        applyOperator(source).subscribe(subscriber);
 
         subscriber.request(1);
 
@@ -104,23 +103,23 @@ public class ConditionalCompactorTest  {
 
         subscriber.request(1);
 
-        subscriber.assertValues("A", "M");
+        subscriber.assertValues("A", "SAF");
 
         subscriber.request(1);
 
-        subscriber.assertValues("A", "M", "A");
+        subscriber.assertValues("A", "SAF", "A");
 
         subscriber.request(1);
 
-        subscriber.assertValues("A", "M", "A", "M");
+        subscriber.assertValues("A", "SAF", "A", "SARF");
 
         subscriber.request(1);
 
-        subscriber.assertValues("A", "M", "A", "M", "R");
+        subscriber.assertValues("A", "SAF", "A", "SARF", "R");
 
         subscriber.request(1);
 
-        subscriber.assertValues("A", "M", "A", "M", "R");
+        subscriber.assertValues("A", "SAF", "A", "SARF", "R");
         subscriber.assertComplete();
 
     }
@@ -130,10 +129,9 @@ public class ConditionalCompactorTest  {
 
         TestSubscriber<String> subscriber = new TestSubscriber<>(0);
 
-        Observable<String> source = Observable.just("A", "S", "A", "A", "S", "A", "R", "F", "R");
+        Flowable<String> source = Flowable.just("A", "S", "A", "A", "S", "A", "R", "F", "R");
 
-        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
-                .subscribe(subscriber);
+        applyOperator(source).subscribe(subscriber);
 
         subscriber.request(1);
 
@@ -153,11 +151,11 @@ public class ConditionalCompactorTest  {
 
         subscriber.request(1);
 
-        subscriber.assertValues("A", "S", "A", "A", "M");
+        subscriber.assertValues("A", "S", "A", "A", "SARF");
 
         subscriber.request(1);
 
-        subscriber.assertValues("A", "S", "A", "A", "M", "R");
+        subscriber.assertValues("A", "S", "A", "A", "SARF", "R");
         subscriber.assertComplete();
     }
 
@@ -172,8 +170,7 @@ public class ConditionalCompactorTest  {
                 Flowable.just("F", "R")
         );
 
-        source.lift(new Main.ConditionalCompactor(100, TimeUnit.MILLISECONDS, Schedulers.computation()))
-                .subscribe(subscriber);
+        applyOperator(source).subscribe(subscriber);
 
         subscriber.request(1);
 
