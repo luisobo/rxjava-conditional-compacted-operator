@@ -21,29 +21,44 @@ import java.util.concurrent.atomic.AtomicLong;
     and later update from https://github.com/luisobo/rxjava-conditional-compacted-operator/pull/2#issuecomment-278732974
     author David Karnok (https://github.com/akarnokd)
  */
-public final class ConditionalCompactor implements FlowableOperator<String, String> {
+public final class ConditionalCompactor<T> implements FlowableOperator<T, T> {
+
+    private final NonThrowingPredicate<T> opensWindow;
+    private final NonThrowingPredicate<T> closesWindow;
+    private final NonThrowingFunction<List<T>, T> compactor;
+
     private final Scheduler scheduler;
 
     private final long timeout;
 
     private final TimeUnit unit;
 
-    public ConditionalCompactor(long timeout, TimeUnit unit,
+    public ConditionalCompactor(NonThrowingPredicate<T> opensWindow, NonThrowingPredicate<T> closesWindow, NonThrowingFunction<List<T>, T> compactor, long timeout, TimeUnit unit,
                          Scheduler scheduler) {
+        this.opensWindow = opensWindow;
+        this.closesWindow = closesWindow;
+        this.compactor = compactor;
         this.scheduler = scheduler;
         this.timeout = timeout;
         this.unit = unit;
     }
 
     @Override
-    public Subscriber<? super String> apply(Subscriber<? super String> t) {
-        return new ConditionalCompactorSubscriber(
-                t, timeout, unit, scheduler.createWorker());
+    public Subscriber<? super T> apply(Subscriber<? super T> t) {
+        return new ConditionalCompactorSubscriber<>(
+                t,
+                opensWindow, closesWindow, compactor,
+                timeout, unit, scheduler.createWorker());
     }
 
-    private static final class ConditionalCompactorSubscriber
-            implements Subscriber<String>, Subscription {
-        final Subscriber<? super String> actual;
+    private static final class ConditionalCompactorSubscriber<T>
+            implements Subscriber<T>, Subscription {
+
+        private final NonThrowingPredicate<T> opensWindow;
+        private final NonThrowingPredicate<T> closesWindow;
+        private final NonThrowingFunction<List<T>, T> compactor;
+
+        final Subscriber<? super T> actual;
 
         final Scheduler.Worker worker;
 
@@ -55,9 +70,9 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
 
         final SerialDisposable mas;
 
-        final Queue<String> queue;
+        final Queue<T> queue;
 
-        final List<String> batch;
+        final List<T> batch;
 
         final AtomicLong requested;
 
@@ -65,7 +80,10 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
 
         static final Disposable NO_TIMER;
 
+        static final Object timeoutMarker;
+
         static {
+            timeoutMarker = new Object();
             NO_TIMER = Disposables.empty();
             NO_TIMER.dispose();
         }
@@ -77,8 +95,12 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
 
         int lastLength;
 
-        private ConditionalCompactorSubscriber(Subscriber<? super String> actual,
+        private ConditionalCompactorSubscriber(Subscriber<? super T> actual,
+                                               NonThrowingPredicate<T> opensWindow, NonThrowingPredicate<T> closesWindow, NonThrowingFunction<List<T>, T> compactor,
                                        long timeout, TimeUnit unit, Scheduler.Worker worker) {
+            this.opensWindow = opensWindow;
+            this.closesWindow = closesWindow;
+            this.compactor = compactor;
             this.actual = actual;
             this.worker = worker;
             this.timeout = timeout;
@@ -98,7 +120,7 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
         }
 
         @Override
-        public void onNext(String t) {
+        public void onNext(T t) {
             queue.offer(t);
             drain();
         }
@@ -147,7 +169,7 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
                         worker.dispose();
                         return;
                     }
-                    String s = queue.peek();
+                    T s = queue.peek();
                     if (s == null) {
                         if (d) {
                             actual.onComplete();
@@ -161,8 +183,16 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
                         batch.clear();
                         batch.addAll(queue);
                         int n = batch.size();
-                        String last = batch.get(n - 1);
-                        if ("S".equals(last)) {
+                        T last = batch.get(n - 1);
+                        if (timeoutMarker.equals(last)) {
+                            actual.onNext(queue.poll());
+                            compacting = false;
+                            mas.set(NO_TIMER);
+                            lastLength = -1;
+                            e++;
+                            continue;
+                        } else
+                        if (opensWindow.test(last)) {
                             if (n > 1) {
                                 actual.onNext(queue.poll());
                                 mas.set(NO_TIMER);
@@ -175,21 +205,14 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
                             if (lastLength <= 0) {
                                 lastLength = 1;
                                 mas.set(worker.schedule(() -> {
-                                    queue.offer("T");
+                                    queue.offer((T) timeoutMarker);
                                     drain();
                                 }, timeout, unit));
                                 this.s.request(1);
                             }
                             break;
-                        } else if ("T".equals(last)) {
-                            actual.onNext(queue.poll());
-                            compacting = false;
-                            mas.set(NO_TIMER);
-                            lastLength = -1;
-                            e++;
-                            continue;
-                        } else if ("F".equals(last)) {
-                            actual.onNext("M");
+                        } else if (closesWindow.test(last)) {
+                            actual.onNext(compactor.apply(batch));
                             while (n-- != 0) {
                                 queue.poll();
                             }
@@ -201,7 +224,7 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
                             if (lastLength != n) {
                                 lastLength = n;
                                 mas.set(worker.schedule(() -> {
-                                    queue.offer("T");
+                                    queue.offer((T) timeoutMarker);
                                     drain();
                                 }, timeout, unit));
                                 this.s.request(1);
@@ -209,15 +232,15 @@ public final class ConditionalCompactor implements FlowableOperator<String, Stri
                             break;
                         }
                     } else {
-                        if ("A".equals(s) || "F".equals(s) || "R".equals(s)) {
+                        if (timeoutMarker.equals(s)) {
+                            // ignore timeout markers outside the compacting mode
+                            queue.poll();
+                        } else if (opensWindow.test(s)) {
+                            compacting = true;
+                        } else {
                             queue.poll();
                             actual.onNext(s);
                             e++;
-                        } else if ("T".equals(s)) {
-                            // ignore timeout markers outside the compacting mode
-                            queue.poll();
-                        } else {
-                            compacting = true;
                         }
                     }
                 }
