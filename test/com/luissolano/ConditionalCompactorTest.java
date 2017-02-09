@@ -57,6 +57,156 @@ public class ConditionalCompactorTest  {
         subscriber.assertValues("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
     }
 
+    @Test
+    public void testBackpressure() {
+
+        TestSubscriber<String> subscriber = new TestSubscriber<>(0);
+
+        Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
+
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
+                .subscribe(subscriber);
+
+        subscriber.request(4);
+
+        subscriber.assertValues("A", "A", "R", "M");
+    }
+
+    @Test
+    public void testBackpressure2() {
+
+        TestSubscriber<String> subscriber = new TestSubscriber<>(0);
+
+        Observable<String> source = Observable.just("A", "A", "R", "S", "A", "R", "F", "R", "A", "A");
+
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
+                .subscribe(subscriber);
+
+        subscriber.request(5);
+
+        subscriber.assertValues("A", "A", "R", "M", "R");
+    }
+
+    @Test
+    public void testBackpressure3() {
+
+        TestSubscriber<String> subscriber = new TestSubscriber<>(0);
+
+        Observable<String> source = Observable.just("A", "S", "A", "F", "A", "S", "A", "R", "F", "R");
+
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
+                .subscribe(subscriber);
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "M");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "M", "A");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "M", "A", "M");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "M", "A", "M", "R");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "M", "A", "M", "R");
+        subscriber.assertComplete();
+
+    }
+
+    @Test
+    public void testItFlushesOnBrokenWindowAndBackpressure() {
+
+        TestSubscriber<String> subscriber = new TestSubscriber<>(0);
+
+        Observable<String> source = Observable.just("A", "S", "A", "A", "S", "A", "R", "F", "R");
+
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.HOURS, Schedulers.computation()))
+                .subscribe(subscriber);
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "S");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "S", "A");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "S", "A", "A");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "S", "A", "A", "M");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "S", "A", "A", "M", "R");
+        subscriber.assertComplete();
+    }
+
+    @Test
+    public void testItFlushesOnTimeoutAndBackpressure() throws InterruptedException {
+
+        TestSubscriber<String> subscriber = new TestSubscriber<>(0);
+
+        Observable<String> source = Observable.concat(Observable.just("A", "A", "R", "S", "A"), Observable.just("R", "F", "R").delay(1, TimeUnit.SECONDS));
+
+        source.toFlowable(BackpressureStrategy.BUFFER).lift(new Main.ConditionalCompactor(500, TimeUnit.MILLISECONDS, Schedulers.computation()))
+                .subscribe(subscriber);
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "A");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "A", "R");
+
+        subscriber.request(1);
+
+        Thread.sleep(600);
+
+        subscriber.assertValues("A", "A", "R", "S");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "A", "R", "S", "A");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "A", "R", "S", "A", "R");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "A", "R", "S", "A", "R", "F");
+
+        subscriber.request(1);
+
+        subscriber.assertValues("A", "A", "R", "S", "A", "R", "F", "R");
+
+        subscriber.assertComplete();
+    }
+
     
 
 
