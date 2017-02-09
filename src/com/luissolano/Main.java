@@ -3,7 +3,9 @@ package com.luissolano;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
+import io.reactivex.internal.util.BackpressureHelper;
 import org.reactivestreams.*;
 
 import io.reactivex.*;
@@ -12,6 +14,7 @@ import io.reactivex.disposables.*;
 import io.reactivex.schedulers.Schedulers;
 
 /* Imported from http://stackoverflow.com/questions/42114546/rxjava-substitute-a-subsequence-of-elements-with-a-single-element/42117531#42117531
+    and later update from https://github.com/luisobo/rxjava-conditional-compacted-operator/pull/2#issuecomment-278732974
     author David Karnok (https://github.com/akarnokd)
  */
 public class Main {
@@ -64,6 +67,8 @@ public class Main {
 
             final List<String> batch;
 
+            final AtomicLong requested;
+
             Subscription s;
 
             static final Disposable NO_TIMER;
@@ -90,6 +95,7 @@ public class Main {
                 this.mas = new SerialDisposable();
                 this.mas.set(NO_TIMER);
                 this.queue = new ConcurrentLinkedQueue<>();
+                this.requested = new AtomicLong();
             }
 
             @Override
@@ -125,7 +131,9 @@ public class Main {
 
             @Override
             public void request(long n) {
+                BackpressureHelper.add(requested, n);
                 s.request(n);
+                drain();
             }
 
             void drain() {
@@ -135,7 +143,10 @@ public class Main {
                 int missed = 1;
                 for (;;) {
 
-                    for (;;) {
+                    long r = requested.get();
+                    long e = 0L;
+
+                    while (e != r) {
                         boolean d = done;
                         if (d && error != null) {
                             queue.clear();
@@ -159,8 +170,13 @@ public class Main {
                             int n = batch.size();
                             String last = batch.get(n - 1);
                             if ("S".equals(last)) {
-                                while (--n != 0) {
+                                if (n > 1) {
                                     actual.onNext(queue.poll());
+                                    mas.set(NO_TIMER);
+                                    lastLength = -1;
+                                    compacting = false;
+                                    e++;
+                                    continue;
                                 }
                                 // keep the last as the start of the new
                                 if (lastLength <= 0) {
@@ -174,13 +190,11 @@ public class Main {
                                 break;
                             } else
                             if ("T".equals(last)) {
-                                while (--n != 0) {
-                                    actual.onNext(queue.poll());
-                                }
-                                queue.poll(); // pop timeout marker
+                                actual.onNext(queue.poll());
                                 compacting = false;
                                 mas.set(NO_TIMER);
                                 lastLength = -1;
+                                e++;
                                 continue;
                             } else
                             if ("F".equals(last)) {
@@ -191,7 +205,7 @@ public class Main {
                                 compacting = false;
                                 mas.set(NO_TIMER);
                                 lastLength = -1;
-                                continue;
+                                e++;
                             } else {
                                 if (lastLength != n) {
                                     lastLength = n;
@@ -207,14 +221,33 @@ public class Main {
                             if ("A".equals(s) || "F".equals(s) || "R".equals(s)) {
                                 queue.poll();
                                 actual.onNext(s);
-                                continue;
+                                e++;
                             } else
                             if ("T".equals(s)) {
                                 // ignore timeout markers outside the compacting mode
                                 queue.poll();
                             } else {
                                 compacting = true;
-                                continue;
+                            }
+                        }
+                    }
+
+                    if (e != 0L) {
+                        BackpressureHelper.produced(requested, e);
+                    }
+
+                    if (e == r) {
+                        if (done) {
+                            if (error != null) {
+                                queue.clear();
+                                actual.onError(error);
+                                worker.dispose();
+                                return;
+                            }
+                            if (queue.isEmpty()) {
+                                actual.onComplete();
+                                worker.dispose();
+                                return;
                             }
                         }
                     }
